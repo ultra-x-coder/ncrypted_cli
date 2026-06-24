@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ncrypted-cli"
+version = "1.0.0"
+description = "Ncrypted encrypted file exchange terminal client with upload/download progress."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx==0.28.1",
+    "pyzstd==0.16.2",
+    "argon2-cffi==23.1.0",
+    "cryptography==44.0.0",
+]
+
+[project.scripts]
+ncrypted = "ncrypted_cli.cli:run"
+
+[tool.setuptools]
+packages = ["ncrypted_cli"]
+py-modules = ["ncrypted"]
