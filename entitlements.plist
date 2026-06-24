@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      PyInstaller --onefile bundles a Python.framework signed with a different
+      Team ID. Under hardened runtime, macOS library validation refuses to
+      dlopen it ("different Team IDs"). This entitlement lifts that check for
+      this process only; it is accepted by notarization.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

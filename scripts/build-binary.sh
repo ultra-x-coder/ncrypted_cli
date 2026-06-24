@@ -26,10 +26,19 @@ pyinstaller \
     "$ENTRYPOINT"
 
 if [ "$(uname -s)" = "Darwin" ] && [ -n "${NCRYPTED_CODESIGN_IDENTITY:-}" ]; then
+    # Hardened runtime + disable-library-validation: the embedded
+    # Python.framework is signed with a different Team ID, so without this
+    # entitlement macOS refuses to dlopen it at runtime ("different Team IDs").
+    entitlements="${NCRYPTED_ENTITLEMENTS:-entitlements.plist}"
+    if [ ! -f "$entitlements" ]; then
+        echo "error: entitlements file not found: $entitlements" >&2
+        exit 1
+    fi
     codesign \
         --force \
         --timestamp \
         --options runtime \
+        --entitlements "$entitlements" \
         --sign "$NCRYPTED_CODESIGN_IDENTITY" \
         "dist/$APP_NAME"
     codesign --verify --strict --verbose=2 "dist/$APP_NAME"
