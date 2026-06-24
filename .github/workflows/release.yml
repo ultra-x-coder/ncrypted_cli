@@ -114,6 +114,8 @@ jobs:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -127,11 +129,30 @@ jobs:
           (cd release && sha256sum ncrypted-* > SHA256SUMS)
           ls -la release
 
+      - name: Build release notes
+        run: |
+          set -eu
+          version="${RELEASE_TAG#v}"
+          # Extract this version's section from CHANGELOG.md: from its
+          # "## [x.y.z]" heading up to (but not including) the next "## [".
+          awk -v ver="$version" '
+            $0 ~ "^## \\[" ver "\\]" { capture = 1; print; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            echo "No CHANGELOG.md section for $version; falling back to tag name"
+            echo "$RELEASE_TAG" > release_notes.md
+          fi
+          echo "----- release notes -----"
+          cat release_notes.md
+
       - name: Create or update release
         run: |
           set -eu
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
             gh release upload "$RELEASE_TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$RELEASE_TAG" release/* --title "$RELEASE_TAG" --generate-notes --repo "$GITHUB_REPOSITORY"
+            gh release create "$RELEASE_TAG" release/* --title "$RELEASE_TAG" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
           fi
