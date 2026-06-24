@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import auth, ui
+from . import __version__, auth, ui
 from .actions import (
     ArchiveWouldNotShrink,
     CryptoFailure,
@@ -443,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {prog} log-out"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument("--server", help="Server URL (overrides NCRYPTED_SERVER).")
     parser.add_argument("--max-up", dest="global_max_up", metavar="RATE", help="Default upload speed limit.")

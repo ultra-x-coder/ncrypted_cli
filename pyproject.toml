@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ncrypted-cli"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Ncrypted encrypted file exchange terminal client with upload/download progress."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,3 +21,6 @@ ncrypted = "ncrypted_cli.cli:run"
 [tool.setuptools]
 packages = ["ncrypted_cli"]
 py-modules = ["ncrypted"]
+
+[tool.setuptools.dynamic]
+version = {attr = "ncrypted_cli.__version__"}
