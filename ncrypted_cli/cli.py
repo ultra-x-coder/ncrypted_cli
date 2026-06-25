@@ -9,10 +9,10 @@ from . import __version__, auth, ui
 from .actions import (
     ArchiveWouldNotShrink,
     CryptoFailure,
+    decrypt_and_save,
     decrypt_private_description,
     do_account_limits,
     do_delete,
-    do_download,
     do_info,
     do_list,
     do_login_user,
@@ -20,6 +20,9 @@ from .actions import (
     do_update,
     do_upload,
     extract_slug,
+    fetch_encrypted_blob,
+    is_archive_name,
+    safe_filename,
 )
 from .api import ApiError, ServerUnavailable, NcryptedClient, Tombstone
 from .config import load_settings
@@ -33,6 +36,7 @@ COMMANDS = {
     "info",
     "upload",
     "download",
+    "decrypt",
     "update",
     "delete",
     "register-user",
@@ -41,12 +45,17 @@ COMMANDS = {
     "log-out",
     "logout",
 }
+MAX_PASSPHRASE_ATTEMPTS = 3
 GLOBAL_OPTIONS_WITH_VALUE = {"--server", "--max-up", "--max-down"}
 
 
 def _fail(msg: str) -> None:
     ui.err(msg)
     raise SystemExit(1)
+
+
+def _prog() -> str:
+    return Path(sys.argv[0]).name or "ncrypted"
 
 
 def _account_urls(server: str) -> tuple[str, str]:
@@ -162,22 +171,77 @@ def _print_file_info(data: dict, server: str, private_decrypted: str | None = No
     _print_kv(rows)
 
 
-def _print_file_line(data: dict, server: str) -> None:
-    file_info = _normalized_file(data, server)
-    fields = [
-        ("slug", file_info["slug"]),
-        ("name", file_info["name"]),
-        ("size", f"{file_info['size']} ({file_info['size_bytes']} bytes)"),
-        ("retention", file_info["retention"]),
-        ("downloads", file_info["downloads"]),
-        ("public", _bool(file_info["public"])),
-        ("archive", _bool(file_info["archive"])),
-        ("created", file_info["created"] or "-"),
-        ("last_dl", file_info["last_download"] or "-"),
-        ("url", file_info["url"]),
-        ("description", file_info["description"] or "-"),
+def _fmt_created(value, *, seconds: bool = False) -> str:
+    """2026-06-25T21:10:27.052000 -> '2026-06-25 21:10' (or HH:MM:SS with seconds)."""
+    if not value:
+        return "-"
+    text = str(value)
+    if "T" not in text:
+        return text
+    date_part, _, time_part = text.partition("T")
+    time_part = time_part.split(".")[0].split("+")[0]
+    if not seconds:
+        time_part = ":".join(time_part.split(":")[:2])
+    return f"{date_part} {time_part}".strip()
+
+
+def _print_files_table(files: list[dict]) -> None:
+    has_desc = any(f["description"] for f in files)
+    headers = ["NAME", "SLUG", "SIZE", "DL", "ACCESS", "CREATED"]
+    rows = [
+        [
+            _clean(f["name"]),
+            _clean(f["slug"]),
+            f["size"],
+            str(f["downloads"]),
+            "public" if f["public"] else "private",
+            _fmt_created(f["created"]),
+        ]
+        for f in files
     ]
-    ui.write("\t".join(f"{key}={_clean(value)}" for key, value in fields))
+    if has_desc:
+        headers.append("DESCRIPTION")
+        for row, f in zip(rows, files):
+            row.append(_clean(f["description"]))
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def fmt(cells: list[str]) -> str:
+        out = []
+        for i, cell in enumerate(cells):
+            # The DL column (index 3) is numeric: right-align it.
+            out.append(cell.rjust(widths[i]) if i == 3 else cell.ljust(widths[i]))
+        return "  ".join(out).rstrip()
+
+    ui.write(fmt(headers))
+    for row in rows:
+        ui.write(fmt(row))
+
+
+def _print_files_full(files: list[dict]) -> None:
+    last = len(files) - 1
+    for idx, f in enumerate(files):
+        ui.write(_clean(f["name"]))
+        rows = [
+            ("slug", f["slug"]),
+            ("size", f"{f['size']} ({f['size_bytes']} bytes)"),
+            ("access", "public" if f["public"] else "private"),
+            ("archive", _bool(f["archive"])),
+            ("downloads", f["downloads"]),
+            ("created", _fmt_created(f["created"], seconds=True)),
+            ("last_dl", _fmt_created(f["last_download"], seconds=True)),
+            ("retention", f["retention"]),
+            ("url", f["url"]),
+            ("description", f["description"] or "-"),
+        ]
+        label_w = max(len(k) for k, _ in rows)
+        for key, value in rows:
+            ui.write(f"  {key.ljust(label_w)}  {_clean(value)}")
+        if idx != last:
+            ui.write()
 
 
 def cmd_list(args, settings) -> None:
@@ -185,15 +249,17 @@ def cmd_list(args, settings) -> None:
         files = do_list(settings.server)
     except CLIENT_ERRORS as e:
         _fail(str(e))
+    normalized = [_normalized_file(item, settings.server) for item in files]
     if args.json_output:
-        normalized = [_normalized_file(item, settings.server) for item in files]
         ui.write(json.dumps(normalized, ensure_ascii=False, indent=2))
         return
-    if not files:
+    if not normalized:
         ui.info("No files uploaded yet.")
         return
-    for item in files:
-        _print_file_line(item, settings.server)
+    if args.full:
+        _print_files_full(normalized)
+    else:
+        _print_files_table(normalized)
 
 
 def cmd_info(args, settings) -> None:
@@ -283,6 +349,55 @@ def cmd_upload(args, settings) -> None:
     _print_kv(rows)
 
 
+def _decrypt_with_retries(
+    blob: bytes,
+    original_filename: str,
+    is_archive: bool,
+    output,
+    no_extract: bool,
+    initial_passphrase: str | None,
+) -> Path | None:
+    """Decrypt `blob` in memory, re-prompting on a wrong passphrase up to
+    MAX_PASSPHRASE_ATTEMPTS times (no re-download). Returns the saved Path, or
+    None if every attempt failed or the user aborted the prompt."""
+    for attempt in range(MAX_PASSPHRASE_ATTEMPTS):
+        if attempt == 0 and initial_passphrase is not None:
+            passphrase = initial_passphrase
+        else:
+            try:
+                passphrase = ui.prompt_passphrase(confirm=False)
+            except (EOFError, KeyboardInterrupt):
+                ui.err("Aborted.")
+                return None
+        try:
+            return decrypt_and_save(
+                blob, passphrase, output, original_filename, is_archive,
+                no_extract=no_extract,
+            )
+        except CryptoFailure:
+            remaining = MAX_PASSPHRASE_ATTEMPTS - attempt - 1
+            if remaining:
+                ui.warn(f"Decryption failed - wrong passphrase? ({remaining} attempt(s) left)")
+            else:
+                ui.err("Decryption failed - wrong passphrase? No attempts left.")
+        except ValueError as e:
+            _fail(str(e))
+    return None
+
+
+def _save_encrypted_blob(blob: bytes, original_filename: str, output) -> Path:
+    """Persist the still-encrypted blob as <name>.enc so a failed download is
+    not wasted; it can be decrypted later with the `decrypt` command."""
+    if output is not None:
+        out = output.expanduser()
+        directory = out if out.is_dir() else (out.parent if out.parent.exists() else Path.cwd())
+    else:
+        directory = Path.cwd()
+    dest = safe_filename(directory, f"{original_filename}.enc")
+    dest.write_bytes(blob)
+    return dest
+
+
 def cmd_download(args, settings) -> None:
     slug = extract_slug(args.slug)
     try:
@@ -307,27 +422,58 @@ def cmd_download(args, settings) -> None:
         ]
     )
 
-    passphrase = args.passphrase or ui.prompt_passphrase(confirm=False)
-    output = args.output
     if limit:
         ui.info(f"Download limited to {ui.human_rate(limit)}")
     try:
-        dest = do_download(
-            settings.server,
-            slug,
-            passphrase,
-            output,
-            info=meta,
-            max_down=limit,
-            no_extract=args.no_extract,
-        )
+        blob, meta = fetch_encrypted_blob(settings.server, slug, info=meta, max_down=limit)
     except Tombstone as t:
         ui.err(f"File was deleted: {t.detail}")
         raise SystemExit(1)
-    except CryptoFailure:
-        _fail("Decryption failed - wrong passphrase?")
     except CLIENT_ERRORS as e:
         _fail(str(e))
+
+    original_filename = meta.get("original_filename") or slug
+    dest = _decrypt_with_retries(
+        blob,
+        original_filename,
+        bool(meta.get("archive")),
+        args.output,
+        args.no_extract,
+        args.passphrase,
+    )
+    if dest is None:
+        enc_path = _save_encrypted_blob(blob, original_filename, args.output)
+        ui.warn(f"Saved still-encrypted file to {enc_path}")
+        ui.info(f"Decrypt it later with: {_prog()} decrypt {enc_path}")
+        raise SystemExit(1)
+    label = "Extracted to" if dest.is_dir() else "Saved to"
+    ui.ok(f"{label}\t\t{dest}")
+
+
+def _enc_original_name(path: Path) -> str:
+    name = path.name
+    if name.lower().endswith(".enc"):
+        return name[:-4] or "download.bin"
+    return name
+
+
+def cmd_decrypt(args, settings) -> None:
+    del settings
+    src = Path(args.path).expanduser()
+    if not src.is_file():
+        _fail(f"File not found: {src}")
+    blob = src.read_bytes()
+    original_filename = _enc_original_name(src)
+    dest = _decrypt_with_retries(
+        blob,
+        original_filename,
+        is_archive_name(original_filename),
+        args.output,
+        args.no_extract,
+        args.passphrase,
+    )
+    if dest is None:
+        raise SystemExit(1)
     label = "Extracted to" if dest.is_dir() else "Saved to"
     ui.ok(f"{label}\t\t{dest}")
 
@@ -440,7 +586,8 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {prog} /path/to/file.ext        # upload a file\n"
             f"  {prog} upload FILE --public\n"
             f"  {prog} download SLUG -o /tmp\n"
-            f"  {prog} list --json\n"
+            f"  {prog} decrypt FILE.enc          # decrypt a saved download\n"
+            f"  {prog} list                     # add --full or --json\n"
             f"  {prog} info SLUG\n"
             f"  {prog} delete SLUG -y\n"
             f"  {prog} log-out\n"
@@ -462,6 +609,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_parser = subparsers.add_parser("list", help="List uploaded files.")
     _add_common(list_parser)
+    list_parser.add_argument("--full", action="store_true", help="Show every field per file.")
     list_parser.add_argument("--json", action="store_true", dest="json_output", help="Print JSON.")
     list_parser.set_defaults(func=cmd_list)
 
@@ -500,6 +648,18 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.add_argument("--no-extract", action="store_true", help="Do not auto-extract archives.")
     download_parser.add_argument("--max-down", metavar="RATE", help="Throttle download speed for this transfer.")
     download_parser.set_defaults(func=cmd_download)
+
+    decrypt_parser = subparsers.add_parser("decrypt", help="Decrypt a previously downloaded .enc file (offline).")
+    decrypt_parser.add_argument("path", help="Path to the encrypted .enc file.")
+    decrypt_parser.add_argument("--passphrase", help="Decryption passphrase.")
+    decrypt_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output file path, or an existing directory to keep the original name.",
+    )
+    decrypt_parser.add_argument("--no-extract", action="store_true", help="Do not auto-extract archives.")
+    decrypt_parser.set_defaults(func=cmd_decrypt)
 
     update_parser = subparsers.add_parser("update", help="Update public/private description.")
     _add_common(update_parser)

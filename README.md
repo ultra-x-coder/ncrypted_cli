@@ -79,9 +79,10 @@ ncrypted --max-up 1m --max-down 5m ...     # default speed limits for the run
 ### Commands
 
 ```bash
-# List your uploads
+# List your uploads (compact table by default)
 ncrypted list
-ncrypted list --json
+ncrypted list --full                          # every field, one block per file
+ncrypted list --json                          # machine-readable
 
 # Show file info (optionally decrypt the private description)
 ncrypted info SLUG
@@ -103,6 +104,14 @@ ncrypted download SLUG -o /tmp/new-name.ext
 ncrypted download SLUG --passphrase PASS
 ncrypted download SLUG --no-extract            # do not auto-extract archives
 ncrypted download SLUG --max-down 5m           # throttle this transfer
+# The blob is downloaded once, then you get up to 3 passphrase attempts. If all
+# fail, the still-encrypted blob is saved as <name>.enc so the download is not
+# wasted — decrypt it later without re-downloading:
+
+# Decrypt a previously saved .enc file (offline, no network, 3 attempts)
+ncrypted decrypt FILE.enc
+ncrypted decrypt FILE.enc -o /tmp
+ncrypted decrypt FILE.enc --passphrase PASS --no-extract
 
 # Update descriptions
 ncrypted update SLUG --public-desc "new caption"

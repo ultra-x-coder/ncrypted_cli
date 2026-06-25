@@ -346,6 +346,76 @@ def do_upload(
     return NcryptedClient(server).upload(blob, fields, max_up=max_up)
 
 
+def fetch_encrypted_blob(
+    server: str,
+    slug: str,
+    *,
+    info: dict | None = None,
+    max_down: int | None = None,
+) -> tuple[bytes, dict]:
+    """Download the still-encrypted blob (archive wrapper already removed) plus
+    its metadata. Decryption is intentionally separate so the caller can retry
+    the passphrase against the in-memory blob without re-downloading, and can
+    persist the blob if every attempt fails."""
+    slug = extract_slug(slug)
+    client = NcryptedClient(server)
+    if info is None:
+        info = client.info(slug)
+
+    blob = client.download(slug, fallback_total=info.get("original_size"), max_down=max_down)
+    if info.get("archive"):
+        blob = _unwrap_encrypted_archive(blob)
+    return blob, info
+
+
+def is_archive_name(name: str) -> bool:
+    return _is_archive_name(name)
+
+
+def decrypt_and_save(
+    blob: bytes,
+    passphrase: str,
+    output: Path | None,
+    original_filename: str,
+    is_archive: bool,
+    *,
+    no_extract: bool = False,
+) -> Path:
+    """Decrypt an in-memory blob and write it out (auto-extracting archives).
+    Raises CryptoFailure on a wrong passphrase so the caller can retry."""
+    explicit_output = output is not None
+    output = (output.expanduser() if output is not None else Path.cwd())
+    if output.exists() and not output.is_dir():
+        raise ValueError(f"Output path already exists and is not a directory: {output}")
+    exact_output = explicit_output and not output.is_dir()
+
+    with spinner("Decrypting file"):
+        try:
+            plaintext = decrypt_blob(blob, passphrase)
+        except Exception as e:
+            raise CryptoFailure(str(e))
+
+    if is_archive and not no_extract:
+        with TemporaryDirectory() as tmp_dir:
+            archive_path = Path(tmp_dir, original_filename)
+            archive_path.write_bytes(plaintext)
+            extracted = _extract_archive_file(
+                archive_path,
+                original_filename,
+                output,
+                exact_output=exact_output,
+            )
+        if extracted is not None:
+            return extracted
+
+    return _save_downloaded_file(
+        plaintext,
+        output,
+        original_filename,
+        exact_output=exact_output,
+    )
+
+
 def do_download(
     server: str,
     slug: str,
@@ -356,47 +426,16 @@ def do_download(
     max_down: int | None = None,
     no_extract: bool = False,
 ) -> Path:
-    """Returns the path the decrypted file was saved to. Caller should have
-    already fetched info (for filename/size); if not, we fetch it here."""
-    slug = extract_slug(slug)
-    explicit_output = output is not None
-    output = (output.expanduser() if output is not None else Path.cwd())
-    if output.exists() and not output.is_dir():
-        raise ValueError(f"Output path already exists and is not a directory: {output}")
-    exact_output = explicit_output and not output.is_dir()
-
-    client = NcryptedClient(server)
-    if info is None:
-        info = client.info(slug)
-
-    blob = client.download(slug, fallback_total=info.get("original_size"), max_down=max_down)
-    if info.get("archive"):
-        blob = _unwrap_encrypted_archive(blob)
-
-    with spinner("Decrypting downloaded file"):
-        try:
-            plaintext = decrypt_blob(blob, passphrase)
-        except Exception as e:
-            raise CryptoFailure(str(e))
-
-    if info.get("archive") and not no_extract:
-        with TemporaryDirectory() as tmp_dir:
-            archive_path = Path(tmp_dir, info["original_filename"])
-            archive_path.write_bytes(plaintext)
-            extracted = _extract_archive_file(
-                archive_path,
-                info["original_filename"],
-                output,
-                exact_output=exact_output,
-            )
-        if extracted is not None:
-            return extracted
-
-    return _save_downloaded_file(
-        plaintext,
+    """Single-attempt download + decrypt (kept for callers that already hold the
+    passphrase). Returns the path the decrypted file was saved to."""
+    blob, info = fetch_encrypted_blob(server, slug, info=info, max_down=max_down)
+    return decrypt_and_save(
+        blob,
+        passphrase,
         output,
         info["original_filename"],
-        exact_output=exact_output,
+        bool(info.get("archive")),
+        no_extract=no_extract,
     )
 
 
