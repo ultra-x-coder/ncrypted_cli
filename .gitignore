@@ -21,3 +21,6 @@ desktop.ini
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.deploy/
+.claude/
+deploy/

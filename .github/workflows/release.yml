@@ -151,8 +151,8 @@ jobs:
         run: |
           set -eu
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
+            gh release edit "$RELEASE_TAG" --notes-file release_notes.md --draft=false --latest --repo "$GITHUB_REPOSITORY"
             gh release upload "$RELEASE_TAG" release/* --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$RELEASE_TAG" release/* --title "$RELEASE_TAG" --notes-file release_notes.md --repo "$GITHUB_REPOSITORY"
+            gh release create "$RELEASE_TAG" release/* --title "$RELEASE_TAG" --notes-file release_notes.md --latest --repo "$GITHUB_REPOSITORY"
           fi
