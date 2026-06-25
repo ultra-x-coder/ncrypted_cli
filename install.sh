@@ -4,6 +4,9 @@ set -eu
 APP_NAME="ncrypted"
 VERSION="${NCRYPTED_VERSION:-latest}"
 INSTALL_DIR="${NCRYPTED_INSTALL_DIR:-$HOME/.local/bin}"
+# onedir bundles (launcher + _internal/) live here; a symlink in INSTALL_DIR
+# exposes the launcher on $PATH.
+LIB_DIR="${NCRYPTED_LIB_DIR:-$HOME/.local/lib/$APP_NAME}"
 BASE_URL="${NCRYPTED_DOWNLOAD_BASE_URL:-https://ncrypted.app/releases/$VERSION}"
 # auto | local | remote. "local" builds/installs from a source checkout,
 # "remote" downloads a release. "auto" picks local when run from the repo.
@@ -75,32 +78,49 @@ find_repo_dir() {
     printf "%s" "$dir"
 }
 
-install_into_path() {
+# Install a onedir bundle: directory $src holds the launcher ($src/ncrypted)
+# next to its _internal/ payload. The launcher resolves _internal/ relative to
+# its own real path, so we copy the whole tree into LIB_DIR and symlink the
+# launcher onto $PATH (a single copied file would not work).
+install_bundle() {
     src="$1"
+    if [ ! -e "$src/$APP_NAME" ]; then
+        echo "error: bundle is missing launcher: $src/$APP_NAME" >&2
+        exit 1
+    fi
+
+    mkdir -p "$(dirname "$LIB_DIR")"
+    staging="${LIB_DIR}.tmp.$$"
+    rm -rf "$staging"
+    cp -R "$src" "$staging"
+    chmod 755 "$staging/$APP_NAME"
+    rm -rf "$LIB_DIR"
+    mv "$staging" "$LIB_DIR"
+
     mkdir -p "$INSTALL_DIR"
-    cp "$src" "$INSTALL_DIR/$APP_NAME"
-    chmod 755 "$INSTALL_DIR/$APP_NAME"
-    echo "Installed $APP_NAME to $INSTALL_DIR/$APP_NAME"
+    ln -sfn "$LIB_DIR/$APP_NAME" "$INSTALL_DIR/$APP_NAME"
+    echo "Installed $APP_NAME bundle to $LIB_DIR"
+    echo "Linked $INSTALL_DIR/$APP_NAME -> $LIB_DIR/$APP_NAME"
 }
 
 install_local() {
     repo="$1"
-    binary="$repo/dist/$APP_NAME"
+    bundle="$repo/dist/$APP_NAME"
 
-    if [ -f "$binary" ]; then
-        echo "Using prebuilt binary: $binary"
+    if [ -d "$bundle" ] && [ -e "$bundle/$APP_NAME" ]; then
+        echo "Using prebuilt bundle: $bundle"
     else
-        echo "No prebuilt binary found; building from source (requires python3)"
+        echo "No prebuilt bundle found; building from source (requires python3)"
         need_cmd python3
         ( cd "$repo" && scripts/build-binary.sh )
     fi
 
-    if [ ! -f "$binary" ]; then
-        echo "error: build did not produce $binary" >&2
+    if [ ! -e "$bundle/$APP_NAME" ]; then
+        echo "error: build did not produce $bundle/$APP_NAME" >&2
         exit 1
     fi
 
-    install_into_path "$binary"
+    install_bundle "$bundle"
 }
 
 install_remote() {
@@ -150,12 +170,12 @@ install_remote() {
             ;;
     esac
 
-    if [ ! -f "$tmp/unpack/$APP_NAME" ]; then
-        echo "error: artifact did not contain $APP_NAME" >&2
+    if [ ! -e "$tmp/unpack/$APP_NAME/$APP_NAME" ]; then
+        echo "error: artifact did not contain the $APP_NAME bundle" >&2
         exit 1
     fi
 
-    install_into_path "$tmp/unpack/$APP_NAME"
+    install_bundle "$tmp/unpack/$APP_NAME"
 }
 
 repo_dir="$(find_repo_dir || true)"

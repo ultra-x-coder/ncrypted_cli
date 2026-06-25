@@ -3,10 +3,11 @@ set -eu
 
 APP_NAME="${NCRYPTED_APP_NAME:-ncrypted}"
 RELEASE_DIR="${NCRYPTED_RELEASE_DIR:-dist/release}"
-BINARY_PATH="${NCRYPTED_BINARY_PATH:-dist/$APP_NAME}"
+BUNDLE_DIR="${NCRYPTED_BUNDLE_DIR:-dist/$APP_NAME}"
 
-if [ ! -f "$BINARY_PATH" ]; then
-    echo "error: binary not found: $BINARY_PATH" >&2
+if [ ! -d "$BUNDLE_DIR" ] || [ ! -e "$BUNDLE_DIR/$APP_NAME" ]; then
+    echo "error: onedir bundle not found: $BUNDLE_DIR" >&2
+    echo "       run scripts/build-binary.sh first" >&2
     exit 1
 fi
 
@@ -34,23 +35,24 @@ esac
 target="${NCRYPTED_TARGET:-$os-$arch}"
 mkdir -p "$RELEASE_DIR"
 
+# Archive the whole onedir tree (launcher + _internal/) preserving symlinks, so
+# the embedded framework structure and its code signatures stay intact.
+parent="$(cd "$(dirname "$BUNDLE_DIR")" && pwd)"
+base="$(basename "$BUNDLE_DIR")"
+release_abs="$(cd "$RELEASE_DIR" && pwd)"
+
 if [ "$os" = "macos" ]; then
     artifact="$RELEASE_DIR/$APP_NAME-$target.zip"
-    artifact_abs="$(pwd)/$artifact"
+    artifact_abs="$release_abs/$APP_NAME-$target.zip"
     rm -f "$artifact"
-    tmp="$(mktemp -d 2>/dev/null || mktemp -d -t ncrypted-package)"
-    trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-    cp "$BINARY_PATH" "$tmp/$APP_NAME"
-    chmod 755 "$tmp/$APP_NAME"
-    (cd "$tmp" && zip -q "$artifact_abs" "$APP_NAME")
+    # ditto is Apple's recommended archiver for notarization: it keeps the
+    # framework's symlinks, extended attributes, and embedded signatures intact.
+    # --keepParent puts the whole bundle under a top-level "$base/" directory.
+    ( cd "$parent" && ditto -c -k --keepParent "$base" "$artifact_abs" )
 else
     artifact="$RELEASE_DIR/$APP_NAME-$target.tar.gz"
     rm -f "$artifact"
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-    cp "$BINARY_PATH" "$tmp/$APP_NAME"
-    chmod 755 "$tmp/$APP_NAME"
-    tar -czf "$artifact" -C "$tmp" "$APP_NAME"
+    tar -czf "$artifact" -C "$parent" "$base"
 fi
 
 if command -v sha256sum >/dev/null 2>&1; then

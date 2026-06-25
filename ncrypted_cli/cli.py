@@ -435,12 +435,17 @@ def build_parser() -> argparse.ArgumentParser:
         description="Secure encrypted file sharing from the terminal.",
         epilog=(
             "Examples:\n"
-            f"  {prog} SLUG\n"
-            f"  {prog} /path/to/file.ext\n"
-            f"  {prog} upload /path/to/file.ext\n"
+            f"  {prog}                          # show settings\n"
+            f"  {prog} SLUG                     # download by slug or URL\n"
+            f"  {prog} /path/to/file.ext        # upload a file\n"
+            f"  {prog} upload FILE --public\n"
+            f"  {prog} download SLUG -o /tmp\n"
             f"  {prog} list --json\n"
             f"  {prog} info SLUG\n"
-            f"  {prog} log-out"
+            f"  {prog} delete SLUG -y\n"
+            f"  {prog} log-out\n"
+            "\n"
+            f"Run '{prog} COMMAND --help' for the full options of any command."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

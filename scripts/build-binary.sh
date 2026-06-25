@@ -18,10 +18,18 @@ fi
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt pyinstaller
 
-rm -rf build "dist/$APP_NAME"
+bundle_dir="dist/$APP_NAME"
+launcher="$bundle_dir/$APP_NAME"
+
+rm -rf build "$bundle_dir"
+# --onedir keeps the interpreter and C-extensions as real files on disk, so the
+# OS validates their code signatures once (and caches the result) instead of on
+# every launch the way --onefile does: onefile re-extracts the whole interpreter
+# to a fresh temp dir each run, which makes macOS re-validate every dylib and
+# pushes startup to ~10s.
 pyinstaller \
     --clean \
-    --onefile \
+    --onedir \
     --name "$APP_NAME" \
     "$ENTRYPOINT"
 
@@ -34,15 +42,29 @@ if [ "$(uname -s)" = "Darwin" ] && [ -n "${NCRYPTED_CODESIGN_IDENTITY:-}" ]; the
         echo "error: entitlements file not found: $entitlements" >&2
         exit 1
     fi
+    # onedir exposes every Mach-O (dylibs, .so, the CPython framework binary) as
+    # a separate file on disk; notarization requires each one signed with a
+    # hardened runtime. Sign all nested Mach-O code first, then the launcher last
+    # (with entitlements).
+    find "$bundle_dir" -type f -print0 \
+        | while IFS= read -r -d '' f; do
+            [ "$f" = "$launcher" ] && continue
+            case "$(file -b "$f" 2>/dev/null)" in
+                *Mach-O*)
+                    codesign --force --timestamp --options runtime \
+                        --sign "$NCRYPTED_CODESIGN_IDENTITY" "$f"
+                    ;;
+            esac
+        done
     codesign \
         --force \
         --timestamp \
         --options runtime \
         --entitlements "$entitlements" \
         --sign "$NCRYPTED_CODESIGN_IDENTITY" \
-        "dist/$APP_NAME"
-    codesign --verify --strict --verbose=2 "dist/$APP_NAME"
+        "$launcher"
+    codesign --verify --strict --verbose=2 "$launcher"
 fi
 
-"dist/$APP_NAME" --help >/dev/null
-echo "Built dist/$APP_NAME"
+"$launcher" --help >/dev/null
+echo "Built $launcher"

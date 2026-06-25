@@ -13,11 +13,12 @@ The public install command is:
 curl -fsSL https://ncrypted.app/install.sh | sh
 ```
 
-The installer downloads the right `ncrypted` binary for the current OS and CPU,
-verifies `SHA256SUMS`, and installs it to:
+The installer downloads the right `ncrypted` bundle for the current OS and CPU,
+verifies `SHA256SUMS`, unpacks it to `~/.local/lib/ncrypted/`, and links the
+launcher onto your `PATH`:
 
 ```bash
-~/.local/bin/ncrypted
+~/.local/bin/ncrypted -> ~/.local/lib/ncrypted/ncrypted
 ```
 
 Override the install directory:
@@ -35,41 +36,92 @@ curl -fsSL https://ncrypted.app/install.sh | \
 
 ## Configuration
 
-Supported environment variables:
+Environment variables (also read from a `.env` file in the current directory or
+next to the client):
 
 ```bash
-NCRYPTED_BRAND=Ncrypted
-NCRYPTED_SERVER=https://ncrypted.app
-NCRYPTED_MAX_UP=1m
-NCRYPTED_MAX_DOWN=5m
+NCRYPTED_SERVER=https://ncrypted.app    # default server
+NCRYPTED_BRAND=Ncrypted                 # display name (or BRAND_NAME)
+NCRYPTED_MAX_UP=1m                      # default upload speed limit
+NCRYPTED_MAX_DOWN=5m                    # default download speed limit
 ```
 
-`--server` overrides `NCRYPTED_SERVER`.
+Real environment variables take precedence over `.env` entries. The CLI flags
+`--server`, `--max-up`, and `--max-down` override the matching variable.
+
+Speed limits are bytes/sec; suffixes `k`/`m`/`g` are 1000-based and
+`ki`/`mi`/`gi` are 1024-based (e.g. `500k`, `1m`, `2mib`). Use `0`, `none`, or
+`off` for no limit.
 
 ## Usage
 
+Run with no command to print the resolved settings and a short intro.
+`ncrypted SLUG` is shorthand for `download`, and `ncrypted <path>` is shorthand
+for `upload`:
+
 ```bash
-ncrypted
-ncrypted SLUG
-ncrypted /path/to/file.ext
-ncrypted upload /path/to/file.ext
-ncrypted list
-ncrypted list --json
-ncrypted info SLUG
-ncrypted download SLUG -o /tmp
-ncrypted download SLUG -o /tmp/new-name.ext
-ncrypted update SLUG --public-desc "new caption"
-ncrypted delete SLUG -y
-ncrypted register-user
-ncrypted login-user
-ncrypted log-out
-ncrypted settings
+ncrypted                                   # show settings / intro
+ncrypted SLUG                              # = ncrypted download SLUG
+ncrypted https://ncrypted.app/s/SLUG       # download by URL
+ncrypted /path/to/file.ext                 # = ncrypted upload /path/to/file.ext
 ```
 
-For downloads, `-o` accepts a new file path. If it points to an existing
-directory, the client saves into that directory using the original file name.
+### Global options
 
-Run `ncrypted --help` for the full command guide.
+Placed before the command:
+
+```bash
+ncrypted --version
+ncrypted --server https://example.com ...  # override NCRYPTED_SERVER
+ncrypted --max-up 1m --max-down 5m ...     # default speed limits for the run
+```
+
+### Commands
+
+```bash
+# List your uploads
+ncrypted list
+ncrypted list --json
+
+# Show file info (optionally decrypt the private description)
+ncrypted info SLUG
+ncrypted info SLUG --show-private [--passphrase PASS]
+
+# Upload (private by default; PATH may be a file or a directory)
+ncrypted upload PATH
+ncrypted upload PATH --public                 # or --no-public (default)
+ncrypted upload PATH --passphrase PASS
+ncrypted upload PATH --public-desc "caption" --private-desc "secret note"
+ncrypted upload PATH --archive                # wrap encrypted data in a ZIP
+ncrypted upload PATH -y                        # skip confirmation
+ncrypted upload PATH --max-up 500k             # throttle this transfer
+
+# Download (auto-decrypts; auto-extracts archives)
+ncrypted download SLUG
+ncrypted download SLUG -o /tmp                 # existing dir -> keep original name
+ncrypted download SLUG -o /tmp/new-name.ext
+ncrypted download SLUG --passphrase PASS
+ncrypted download SLUG --no-extract            # do not auto-extract archives
+ncrypted download SLUG --max-down 5m           # throttle this transfer
+
+# Update descriptions
+ncrypted update SLUG --public-desc "new caption"
+ncrypted update SLUG --private-desc "new note" [--passphrase PASS]
+
+# Delete
+ncrypted delete SLUG
+ncrypted delete SLUG -y                         # skip confirmation
+
+# Accounts / session
+ncrypted register-user
+ncrypted login-user
+ncrypted log-out                                # alias: logout
+ncrypted settings                               # print resolved settings
+```
+
+Every command also accepts `--server`. For `download`, `-o`/`--output` takes a
+new file path, or an existing directory (the client then keeps the original
+file name). Run `ncrypted COMMAND --help` for the full flag list of any command.
 
 ## Local Binary Build
 
@@ -81,9 +133,9 @@ scripts/package-binary.sh
 Outputs:
 
 ```bash
-dist/ncrypted
-dist/release/ncrypted-<os>-<arch>.tar.gz
-dist/release/ncrypted-<os>-<arch>.zip
+dist/ncrypted/                            # onedir bundle (launcher + _internal/)
+dist/release/ncrypted-<os>-<arch>.tar.gz  # Linux archive
+dist/release/ncrypted-<os>-<arch>.zip     # macOS archive
 ```
 
 macOS signing is automatic when this variable is set:
