@@ -1,11 +1,19 @@
 """Small stderr progress bar and spinner used by uploads/downloads."""
 
 import io
+import shutil
 import sys
 import threading
 import time
 
 from .ui import human_bytes, human_eta
+
+
+def _term_width() -> int:
+    try:
+        return shutil.get_terminal_size().columns
+    except OSError:
+        return 80
 
 
 class SimpleProgress:
@@ -47,6 +55,10 @@ class SimpleProgress:
         self._render()
 
     def _render(self, force: bool = False) -> None:
+        # Live, in-place rendering only makes sense on a TTY. When stderr is a
+        # pipe/file, \r-overwriting just smears one long line, so stay silent.
+        if not sys.stderr.isatty():
+            return
         now = time.monotonic()
         if not force and now - self._last_render < 0.08:
             return
@@ -71,7 +83,12 @@ class SimpleProgress:
                 f"{human_bytes(speed)}/s"
             )
 
-        sys.stderr.write("\r" + line[:120].ljust(120))
+        # Clamp to the real terminal width (minus one, to leave the last column
+        # free) and pad to exactly that width. Truncating below the width means
+        # the line never wraps, so \r reliably returns to column 0 of the SAME
+        # line and the bar updates in place instead of stacking.
+        width = max(_term_width() - 1, 20)
+        sys.stderr.write("\r" + line[:width].ljust(width))
         sys.stderr.flush()
         self._rendered = True
 
