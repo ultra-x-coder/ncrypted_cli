@@ -44,7 +44,24 @@ NCRYPTED_SERVER=https://ncrypted.app    # default server
 NCRYPTED_BRAND=Ncrypted                 # display name (or BRAND_NAME)
 NCRYPTED_MAX_UP=1m                      # default upload speed limit
 NCRYPTED_MAX_DOWN=5m                    # default download speed limit
+NCRYPTED_NO_NAG=1                       # silence the "register an account" banner
+NCRYPTED_NAG_INTERVAL=10                 # minutes between banners (0 = always; default 10)
+NCRYPTED_NO_UPDATE_CHECK=1              # silence the "new version available" notice
+NCRYPTED_UPDATE_CHECK_INTERVAL=24       # hours between update checks (0 = always; default 24)
 ```
+
+The "register an account" banner shows on the first eligible command, then at
+most once per `NCRYPTED_NAG_INTERVAL` minutes (default 10). Set it to `0` to show
+on every command, or set `NCRYPTED_NO_NAG=1` to silence it entirely.
+
+The client also checks for a newer release at most once per
+`NCRYPTED_UPDATE_CHECK_INTERVAL` hours (default 24, cached locally) and, when one
+is published, prints a hint to re-run the installer. The check is best-effort and
+never blocks a command. Disable it with `NCRYPTED_NO_UPDATE_CHECK=1`; override the
+fetched manifest with `NCRYPTED_VERSION_URL` (defaults to
+`<server>/releases/latest/VERSION`).
+
+Set `NO_COLOR` to disable ANSI colors in the banner.
 
 Real environment variables take precedence over `.env` entries. The CLI flags
 `--server`, `--max-up`, and `--max-down` override the matching variable.
@@ -97,12 +114,12 @@ ncrypted upload PATH --archive                # wrap encrypted data in a ZIP
 ncrypted upload PATH -y                        # skip confirmation
 ncrypted upload PATH --max-up 500k             # throttle this transfer
 
-# Download (auto-decrypts; auto-extracts archives)
+# Download (auto-decrypts; archives are kept as-is unless you ask to extract)
 ncrypted download SLUG
 ncrypted download SLUG -o /tmp                 # existing dir -> keep original name
 ncrypted download SLUG -o /tmp/new-name.ext
 ncrypted download SLUG --passphrase PASS
-ncrypted download SLUG --no-extract            # do not auto-extract archives
+ncrypted download SLUG --extract               # unpack the archive after decrypting (-x)
 ncrypted download SLUG --max-down 5m           # throttle this transfer
 # The blob is downloaded once, then you get up to 3 passphrase attempts. If all
 # fail, the still-encrypted blob is saved as <name>.enc so the download is not
@@ -111,7 +128,9 @@ ncrypted download SLUG --max-down 5m           # throttle this transfer
 # Decrypt a previously saved .enc file (offline, no network, 3 attempts)
 ncrypted decrypt FILE.enc
 ncrypted decrypt FILE.enc -o /tmp
-ncrypted decrypt FILE.enc --passphrase PASS --no-extract
+ncrypted decrypt FILE.enc --passphrase PASS --extract   # unpack the archive (-x)
+ncrypted decrypt FILE.enc --remove             # delete FILE.enc after success (-r)
+# Without --remove you're asked "Delete the encrypted file?" (defaults to no).
 
 # Update descriptions
 ncrypted update SLUG --public-desc "new caption"

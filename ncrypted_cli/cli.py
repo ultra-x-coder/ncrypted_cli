@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, auth, ui
+from . import __version__, auth, banner, instance, ui, version_check
 from .actions import (
     ArchiveWouldNotShrink,
     CryptoFailure,
@@ -56,6 +56,34 @@ def _fail(msg: str) -> None:
 
 def _prog() -> str:
     return Path(sys.argv[0]).name or "ncrypted"
+
+
+def _maybe_register_cta(args, settings) -> None:
+    """Footer call-to-action nudging device-mode users to register. Never raises
+    into the command flow."""
+    try:
+        if auth.get_auth_mode() == "user":
+            return
+        command = getattr(args, "command", None)
+        if command in {"register-user", "login-user", "log-out", "logout"}:
+            return
+        if getattr(args, "json_output", False):
+            return
+        _, register_url = _account_urls(settings.server)
+        banner.maybe_print_register_cta(register_url, f"{_prog()} register-user")
+    except Exception:
+        pass
+
+
+def _maybe_check_update(args, settings) -> None:
+    """Footer notice when a newer client version is published. Never raises into
+    the command flow."""
+    try:
+        if getattr(args, "json_output", False):
+            return
+        version_check.maybe_notify_update(settings.server)
+    except Exception:
+        pass
 
 
 def _account_urls(server: str) -> tuple[str, str]:
@@ -354,7 +382,7 @@ def _decrypt_with_retries(
     original_filename: str,
     is_archive: bool,
     output,
-    no_extract: bool,
+    extract: bool,
     initial_passphrase: str | None,
 ) -> Path | None:
     """Decrypt `blob` in memory, re-prompting on a wrong passphrase up to
@@ -372,7 +400,7 @@ def _decrypt_with_retries(
         try:
             return decrypt_and_save(
                 blob, passphrase, output, original_filename, is_archive,
-                no_extract=no_extract,
+                extract=extract,
             )
         except CryptoFailure:
             remaining = MAX_PASSPHRASE_ATTEMPTS - attempt - 1
@@ -418,7 +446,7 @@ def cmd_download(args, settings) -> None:
         [
             ("File", meta.get("original_filename", "")),
             ("Size", f"{ui.human_bytes(size)} ({size} bytes)"),
-            ("Archive", f"yes{' (auto-extract)' if meta.get('archive') and not args.no_extract else ''}" if meta.get("archive") else "no"),
+            ("Archive", f"yes{' (will extract)' if meta.get('archive') and args.extract else ''}" if meta.get("archive") else "no"),
         ]
     )
 
@@ -438,7 +466,7 @@ def cmd_download(args, settings) -> None:
         original_filename,
         bool(meta.get("archive")),
         args.output,
-        args.no_extract,
+        args.extract,
         args.passphrase,
     )
     if dest is None:
@@ -457,6 +485,34 @@ def _enc_original_name(path: Path) -> str:
     return name
 
 
+def _maybe_remove_encrypted(src: Path, dest: Path, remove: bool) -> None:
+    """After a successful decrypt, optionally delete the source encrypted file.
+    With --remove it is deleted unconditionally; otherwise we ask (TTY only,
+    default no). Never deletes the freshly written output, never raises."""
+    try:
+        if src.resolve() == dest.resolve():
+            return
+    except OSError:
+        return
+    if remove:
+        should = True
+    elif sys.stdin.isatty():
+        try:
+            should = ui.confirm("Delete the encrypted file?", default=False)
+        except (EOFError, KeyboardInterrupt):
+            ui.write()
+            return
+    else:
+        should = False
+    if not should:
+        return
+    try:
+        src.unlink()
+        ui.ok(f"Removed\t\t{src}")
+    except OSError as e:
+        ui.warn(f"Could not remove {src}: {e}")
+
+
 def cmd_decrypt(args, settings) -> None:
     del settings
     src = Path(args.path).expanduser()
@@ -469,13 +525,14 @@ def cmd_decrypt(args, settings) -> None:
         original_filename,
         is_archive_name(original_filename),
         args.output,
-        args.no_extract,
+        args.extract,
         args.passphrase,
     )
     if dest is None:
         raise SystemExit(1)
     label = "Extracted to" if dest.is_dir() else "Saved to"
     ui.ok(f"{label}\t\t{dest}")
+    _maybe_remove_encrypted(src, dest, args.remove)
 
 
 def cmd_update(args, settings) -> None:
@@ -645,7 +702,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Output file path, or an existing directory to keep the original name.",
     )
-    download_parser.add_argument("--no-extract", action="store_true", help="Do not auto-extract archives.")
+    download_parser.add_argument("-x", "--extract", action="store_true", help="Extract the archive after decrypting (default: keep the archive file).")
     download_parser.add_argument("--max-down", metavar="RATE", help="Throttle download speed for this transfer.")
     download_parser.set_defaults(func=cmd_download)
 
@@ -658,7 +715,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Output file path, or an existing directory to keep the original name.",
     )
-    decrypt_parser.add_argument("--no-extract", action="store_true", help="Do not auto-extract archives.")
+    decrypt_parser.add_argument("-x", "--extract", action="store_true", help="Extract the archive after decrypting (default: keep the archive file).")
+    decrypt_parser.add_argument("-r", "--remove", action="store_true", help="Delete the encrypted source file after a successful decrypt.")
     decrypt_parser.set_defaults(func=cmd_decrypt)
 
     update_parser = subparsers.add_parser("update", help="Update public/private description.")
@@ -745,8 +803,16 @@ def run(argv: list[str] | None = None) -> None:
     except ValueError as e:
         _fail(str(e))
 
+    # One ncrypted process at a time per machine, so the client cannot be turned
+    # into a parallel request generator against the server.
+    try:
+        instance.acquire()
+    except instance.AlreadyRunning as e:
+        _fail(str(e))
+
     if not getattr(args, "command", None):
         _print_intro(settings)
+        _maybe_check_update(args, settings)
         return
 
     try:
@@ -754,3 +820,5 @@ def run(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         ui.err("Aborted.")
         raise SystemExit(1)
+    _maybe_register_cta(args, settings)
+    _maybe_check_update(args, settings)

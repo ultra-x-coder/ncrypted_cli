@@ -379,10 +379,11 @@ def decrypt_and_save(
     original_filename: str,
     is_archive: bool,
     *,
-    no_extract: bool = False,
+    extract: bool = False,
 ) -> Path:
-    """Decrypt an in-memory blob and write it out (auto-extracting archives).
-    Raises CryptoFailure on a wrong passphrase so the caller can retry."""
+    """Decrypt an in-memory blob and write it out. Archives are extracted only
+    when `extract` is set (otherwise the archive file is saved as-is). Raises
+    CryptoFailure on a wrong passphrase so the caller can retry."""
     explicit_output = output is not None
     output = (output.expanduser() if output is not None else Path.cwd())
     if output.exists() and not output.is_dir():
@@ -395,7 +396,7 @@ def decrypt_and_save(
         except Exception as e:
             raise CryptoFailure(str(e))
 
-    if is_archive and not no_extract:
+    if is_archive and extract:
         with TemporaryDirectory() as tmp_dir:
             archive_path = Path(tmp_dir, original_filename)
             archive_path.write_bytes(plaintext)
@@ -424,7 +425,7 @@ def do_download(
     *,
     info: dict | None = None,
     max_down: int | None = None,
-    no_extract: bool = False,
+    extract: bool = False,
 ) -> Path:
     """Single-attempt download + decrypt (kept for callers that already hold the
     passphrase). Returns the path the decrypted file was saved to."""
@@ -435,7 +436,7 @@ def do_download(
         output,
         info["original_filename"],
         bool(info.get("archive")),
-        no_extract=no_extract,
+        extract=extract,
     )
 
 
