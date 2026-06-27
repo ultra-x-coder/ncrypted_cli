@@ -129,6 +129,17 @@ jobs:
           (cd release && sha256sum ncrypted-* > SHA256SUMS)
           ls -la release
 
+      - name: Write VERSION file
+        run: |
+          set -eu
+          version="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' ncrypted_cli/__init__.py)"
+          if [ -z "$version" ]; then
+            echo "Could not read __version__ from ncrypted_cli/__init__.py" >&2
+            exit 1
+          fi
+          printf '%s\n' "$version" > release/VERSION
+          echo "VERSION = $version"
+
       - name: Build release notes
         run: |
           set -eu
