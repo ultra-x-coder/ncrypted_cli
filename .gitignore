@@ -24,3 +24,4 @@ desktop.ini
 .deploy/
 .claude/
 deploy/
+README_gitignore.md

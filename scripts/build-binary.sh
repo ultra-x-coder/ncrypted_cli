@@ -31,6 +31,7 @@ pyinstaller \
     --clean \
     --onedir \
     --name "$APP_NAME" \
+    --add-data "ncrypted_cli/assets/common_passwords_1k.txt:ncrypted_cli/assets" \
     "$ENTRYPOINT"
 
 if [ "$(uname -s)" = "Darwin" ] && [ -n "${NCRYPTED_CODESIGN_IDENTITY:-}" ]; then

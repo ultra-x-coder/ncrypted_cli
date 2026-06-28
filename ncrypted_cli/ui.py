@@ -31,8 +31,8 @@ def human_bytes(n) -> str:
         return str(n)
     units = ["B", "KB", "MB", "GB", "TB", "PB"]
     unit_index = 0
-    while value >= 1024 and unit_index < len(units) - 1:
-        value /= 1024.0
+    while value >= 1000 and unit_index < len(units) - 1:
+        value /= 1000.0
         unit_index += 1
     if unit_index == 0:
         return f"{int(value)} {units[unit_index]}"

@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 from . import auth
 from .api import NcryptedClient
 from .crypto import decrypt_blob, decrypt_text, encrypt_blob, encrypt_text
+from .passphrase_policy import validate_passphrase
 from .progress import spinner
 from .ui import human_bytes
 
@@ -260,6 +261,8 @@ def do_update(
             if passphrase_prompt is None:
                 raise ValueError("Passphrase required to encrypt private description.")
             passphrase = passphrase_prompt()
+        # Same policy as upload: validate before encrypting the private blob.
+        validate_passphrase(passphrase)
         body["private_description"] = encrypt_text(private_desc, passphrase)
     if not body:
         raise ValueError("Nothing to update.")
@@ -288,6 +291,10 @@ def do_upload(
     archive_confirm=None,
     archive_info=None,
 ) -> dict:
+    # Validate the encryption passphrase BEFORE touching the file or encrypting
+    # (mirrors the server validating on /auth/register). Raises
+    # PassphrasePolicyError (a ValueError) the callers already handle.
+    validate_passphrase(passphrase)
     if not filepath.exists():
         raise ValueError(f"File not found: {filepath}")
     if filepath.is_dir() and not archive:

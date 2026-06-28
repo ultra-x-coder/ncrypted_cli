@@ -173,9 +173,12 @@ def _print_intro(settings) -> None:
     ui.write(f"max upload size: {ui.format_max_file_size(limits)}")
     ui.write(f"uploads remaining: {ui.format_uploads_remaining(limits)}")
     ui.write()
-    ui.write(f"Already have account? Sign in: {login_url}")
-    ui.write(f"Register to use this account from different devices: {register_url}")
-    ui.write()
+    # Only nudge device-mode users to sign in / register; someone already on a
+    # user account is logged in, so these calls to action would be confusing.
+    if auth_mode != "user":
+        ui.write(f"Already have account? Sign in: {login_url}")
+        ui.write(f"Register to use this account from different devices: {register_url}")
+        ui.write()
     ui.write("Use --help to see usage guide.")
 
 
