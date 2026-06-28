@@ -6,13 +6,15 @@ from pathlib import Path
 
 from .throttle import parse_rate
 
-DEFAULT_SERVER = "https://ncrypted.app"
+DEFAULT_SERVER = "https://api.ncrypted.app"  # API host: upload/download/auth/account
+DEFAULT_SITE = "https://ncrypted.app"  # apex: web UI + /releases/ + /install.sh
 DEFAULT_BRAND = "Ncrypted"
 
 
 @dataclass
 class Settings:
     server: str
+    site: str
     brand: str
     max_up: int | None = None
     max_down: int | None = None
@@ -60,6 +62,10 @@ def load_settings(
         or os.getenv("NCRYPTED_SERVER")
         or DEFAULT_SERVER
     ).rstrip("/")
+    site = (
+        os.getenv("NCRYPTED_SITE_URL")
+        or DEFAULT_SITE
+    ).rstrip("/")
     brand = (
         os.getenv("NCRYPTED_BRAND")
         or os.getenv("BRAND_NAME")
@@ -69,4 +75,4 @@ def load_settings(
     max_down_env = os.getenv("NCRYPTED_MAX_DOWN")
     max_up = parse_rate(max_up_opt if max_up_opt is not None else max_up_env)
     max_down = parse_rate(max_down_opt if max_down_opt is not None else max_down_env)
-    return Settings(server=server, brand=brand, max_up=max_up, max_down=max_down)
+    return Settings(server=server, site=site, brand=brand, max_up=max_up, max_down=max_down)

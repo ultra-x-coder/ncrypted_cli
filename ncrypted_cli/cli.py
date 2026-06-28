@@ -69,7 +69,7 @@ def _maybe_register_cta(args, settings) -> None:
             return
         if getattr(args, "json_output", False):
             return
-        _, register_url = _account_urls(settings.server)
+        _, register_url = _account_urls(settings.site)
         banner.maybe_print_register_cta(register_url, f"{_prog()} register-user")
     except Exception:
         pass
@@ -81,14 +81,14 @@ def _maybe_check_update(args, settings) -> None:
     try:
         if getattr(args, "json_output", False):
             return
-        version_check.maybe_notify_update(settings.server)
+        version_check.maybe_notify_update(settings.site)
     except Exception:
         pass
 
 
-def _account_urls(server: str) -> tuple[str, str]:
-    base = server.rstrip("/")
-    return f"{base}/web/login", f"{base}/web/register"
+def _account_urls(site: str) -> tuple[str, str]:
+    base = site.rstrip("/")
+    return f"{base}/login", f"{base}/register"
 
 
 def _get_account_limits(server: str) -> dict | None:
@@ -156,7 +156,7 @@ def _print_kv(rows: list[tuple[str, object]]) -> None:
 
 
 def _print_intro(settings) -> None:
-    login_url, register_url = _account_urls(settings.server)
+    login_url, register_url = _account_urls(settings.site)
     limits = _get_account_limits(settings.server)
     auth_mode = auth.get_auth_mode()
     if auth_mode == "user":
@@ -600,7 +600,7 @@ def cmd_login_user(args, settings) -> None:
 def cmd_settings(args, settings) -> None:
     del args
     limits = _get_account_limits(settings.server)
-    login_url, register_url = _account_urls(settings.server)
+    login_url, register_url = _account_urls(settings.site)
     rows = [
         ("Brand", settings.brand),
         ("Server", settings.server),

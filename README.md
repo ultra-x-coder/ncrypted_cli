@@ -40,7 +40,8 @@ Environment variables (also read from a `.env` file in the current directory or
 next to the client):
 
 ```bash
-NCRYPTED_SERVER=https://ncrypted.app    # default server
+NCRYPTED_SERVER=https://api.ncrypted.app  # default API host (upload/download/auth)
+NCRYPTED_SITE_URL=https://ncrypted.app  # web UI / releases host (apex); default shown
 NCRYPTED_BRAND=Ncrypted                 # display name (or BRAND_NAME)
 NCRYPTED_MAX_UP=1m                      # default upload speed limit
 NCRYPTED_MAX_DOWN=5m                    # default download speed limit
@@ -79,7 +80,7 @@ for `upload`:
 ```bash
 ncrypted                                   # show settings / intro
 ncrypted SLUG                              # = ncrypted download SLUG
-ncrypted https://ncrypted.app/s/SLUG       # download by URL
+ncrypted https://api.ncrypted.app/d/SLUG   # download by URL
 ncrypted /path/to/file.ext                 # = ncrypted upload /path/to/file.ext
 ```
 
