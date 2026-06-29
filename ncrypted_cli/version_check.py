@@ -4,8 +4,12 @@ installer.
 
 Policy mirrors the register banner — TTY-only and fail-safe (any network or
 parse error is swallowed, never breaking a command). The network is hit at most
-once per NCRYPTED_UPDATE_CHECK_INTERVAL hours; the last result is cached next to
-the auth token so we can keep nudging between checks without re-fetching.
+once per NCRYPTED_UPDATE_CHECK_INTERVAL hours (default 30 minutes); when it is
+hit we send a conditional request (If-None-Match with the cached ETag), so an
+unchanged VERSION comes back as a tiny 304 and only a real publish transfers a
+body. That keeps the interval cheap to run AND short, so a freshly released
+version is noticed within one interval instead of a full day. The last result +
+ETag are cached next to the auth token.
 
 Controls:
   - NCRYPTED_NO_UPDATE_CHECK       -> disable entirely,
@@ -22,8 +26,11 @@ import httpx
 
 from . import __version__, auth
 
-CHECK_INTERVAL_HOURS = 24
+CHECK_INTERVAL_HOURS = 0.1  # 30 minutes
 INSTALL_URL = "https://ncrypted.app/install.sh"
+
+# Sentinel: a conditional fetch returned 304 Not Modified (keep the cached value).
+_NOT_MODIFIED = object()
 
 RESET = "\033[0m"
 C_NEW = "\033[1;32m"   # bold green: the new version + arrows (the upgrade)
@@ -83,52 +90,75 @@ def _is_newer(latest: str, current: str) -> bool:
     return a > b
 
 
-def _fetch_latest(server: str) -> str | None:
+def _fetch_latest(server: str, etag: str | None = None):
+    """Conditional GET of the VERSION file. Returns one of:
+      - ``(version, etag)`` on 200 (changed / first fetch),
+      - ``_NOT_MODIFIED`` on 304 (caller keeps its cached version),
+      - ``None`` on any error or other status (caller falls back to cache)."""
+    headers = {"If-None-Match": etag} if etag else {}
     try:
-        resp = httpx.get(_version_url(server), timeout=3, follow_redirects=True)
+        resp = httpx.get(
+            _version_url(server), timeout=3, follow_redirects=True, headers=headers
+        )
     except httpx.HTTPError:
         return None
+    if resp.status_code == 304:
+        return _NOT_MODIFIED
     if resp.status_code != 200:
         return None
     lines = (resp.text or "").strip().splitlines()
-    return lines[0].strip() if lines else None
+    version = lines[0].strip() if lines else None
+    if not version:
+        return None
+    return version, resp.headers.get("ETag", "")
 
 
 def _read_cache():
-    """Return (last_check_ts, latest_version) or (None, None)."""
+    """Return (last_check_ts, latest_version, etag) or (None, None, None). The
+    etag line is optional (absent in caches written by older clients)."""
     try:
         lines = _stamp_file().read_text().splitlines()
     except OSError:
-        return None, None
+        return None, None, None
     if not lines:
-        return None, None
+        return None, None, None
     try:
         ts = float(lines[0].strip())
     except ValueError:
-        return None, None
+        return None, None, None
     latest = lines[1].strip() if len(lines) > 1 and lines[1].strip() else None
-    return ts, latest
+    etag = lines[2].strip() if len(lines) > 2 and lines[2].strip() else None
+    return ts, latest, etag
 
 
-def _write_cache(ts: float, latest: str) -> None:
+def _write_cache(ts: float, latest: str | None, etag: str | None = "") -> None:
     try:
         auth.TOKEN_DIR.mkdir(parents=True, exist_ok=True)
-        _stamp_file().write_text(f"{ts!r}\n{latest}\n")
+        _stamp_file().write_text(f"{ts!r}\n{latest or ''}\n{etag or ''}\n")
     except OSError:
         pass
 
 
 def _current_latest(server: str) -> str | None:
     """Latest published version, served from the cache while it is fresh and
-    refreshed over the network otherwise. None when the network check fails."""
+    refreshed over the network otherwise. The refresh is a conditional request,
+    so an unchanged VERSION is a cheap 304 and the interval can stay short."""
     now = time.time()
-    last_ts, cached = _read_cache()
+    last_ts, cached, etag = _read_cache()
+    # Inside the interval: trust the cache, skip the network entirely.
     if last_ts is not None and 0 <= (now - last_ts) < _interval_seconds():
         return cached
-    latest = _fetch_latest(server)
-    if latest is None:
-        return None
-    _write_cache(now, latest)
+    result = _fetch_latest(server, etag)
+    if result is _NOT_MODIFIED:
+        # Upstream unchanged: keep the cached version, just reset the throttle.
+        _write_cache(now, cached, etag)
+        return cached
+    if result is None:
+        # Network/parse failure: fall back to the last known value (may be None).
+        # Leave the timestamp stale so the next run retries instead of waiting.
+        return cached
+    latest, new_etag = result
+    _write_cache(now, latest, new_etag)
     return latest
 
 
