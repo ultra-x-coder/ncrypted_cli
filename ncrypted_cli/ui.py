@@ -106,6 +106,15 @@ def prompt_password(label: str = "Password", confirm: bool = False) -> str:
     return password
 
 
+def pause(label: str) -> None:
+    """Block until the user presses Enter (used to wait for an out-of-band step,
+    e.g. solving a captcha in the browser). A closed stdin just returns."""
+    try:
+        input(label)
+    except (EOFError, KeyboardInterrupt):
+        write()
+
+
 def confirm(label: str, default: bool = False) -> bool:
     marker = "Y/n" if default else "y/N"
     answer = input(f"{label} [{marker}]: ").strip().lower()

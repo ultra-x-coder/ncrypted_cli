@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import urlparse
 
 from . import auth
-from .api import NcryptedClient
+from .api import CaptchaRequired, NcryptedClient
 from .crypto import decrypt_blob, decrypt_text, encrypt_blob, encrypt_text
 from .passphrase_policy import validate_passphrase
 from .progress import spinner
@@ -447,13 +447,61 @@ def do_download(
     )
 
 
-def do_register_user(server: str, username: str, password: str) -> dict:
-    return NcryptedClient(server).auth_register(username, password)
+def do_register_user(
+    server: str,
+    username: str,
+    password: str,
+    *,
+    on_captcha=None,
+) -> dict:
+    """Register, transparently driving the captcha challenge when the server demands
+    one (Turnstile is now required on every registration). Mirrors do_login_user:
+    `on_captcha(challenge)` must present the challenge AND block until it is solved,
+    then we retry the SAME username (the solved-captcha grant is bound server-side to
+    the ip|register|username context, so the username must not change between tries)."""
+    client = NcryptedClient(server)
+    attempts = 0
+    while True:
+        try:
+            return client.auth_register(username, password)
+        except CaptchaRequired as challenge:
+            if on_captcha is None:
+                raise
+            attempts += 1
+            if attempts > MAX_CAPTCHA_ATTEMPTS:
+                raise ValueError("Captcha not completed; registration aborted.")
+            on_captcha(challenge)
 
 
-def do_login_user(server: str, username: str, password: str) -> dict:
+MAX_CAPTCHA_ATTEMPTS = 5
+
+
+def do_login_user(
+    server: str,
+    username: str,
+    password: str,
+    *,
+    on_captcha=None,
+) -> dict:
+    """Log in, transparently driving the captcha challenge when the server demands
+    one. `on_captcha(challenge)` must present the challenge AND block until the user
+    has solved it (e.g. show URL/QR, wait for Enter); we then retry the same
+    credentials, which the server accepts via the solved-captcha grant. Without an
+    `on_captcha` handler the CaptchaRequired propagates to the caller unchanged."""
     device_hash = auth.get_device_hash()
-    data = NcryptedClient(server).auth_login(username, password, device_hash)
+    client = NcryptedClient(server)
+    attempts = 0
+    while True:
+        try:
+            data = client.auth_login(username, password, device_hash)
+            break
+        except CaptchaRequired as challenge:
+            if on_captcha is None:
+                raise
+            attempts += 1
+            if attempts > MAX_CAPTCHA_ATTEMPTS:
+                raise ValueError("Captcha not completed; login aborted.")
+            on_captcha(challenge)
     if data.get("token"):
         auth.save_token(data["token"])
     auth.save_auth_mode("user")

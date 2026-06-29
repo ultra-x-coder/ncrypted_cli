@@ -37,6 +37,20 @@ class Tombstone(Exception):
         super().__init__(detail)
 
 
+class CaptchaRequired(Exception):
+    """Login is throttled: the server wants a human-verification challenge solved
+    (out-of-band, via the URL) before it will accept another attempt. The caller
+    shows the URL/QR, waits for the user, then retries the same credentials — the
+    solved-captcha grant is bound server-side to the ip|username context, so no
+    token needs to be sent back."""
+
+    def __init__(self, challenge_id: str, challenge_url: str, message: str = ""):
+        self.challenge_id = challenge_id
+        self.challenge_url = challenge_url
+        self.message = message or "Confirm you are human to continue."
+        super().__init__(self.message)
+
+
 def _detail(resp: httpx.Response) -> str:
     try:
         data = resp.json()
@@ -45,6 +59,20 @@ def _detail(resp: httpx.Response) -> str:
     except Exception:
         pass
     return resp.text or f"HTTP {resp.status_code}"
+
+
+def _captcha_detail(resp: httpx.Response) -> dict | None:
+    """Return the inner captcha payload when the body is the server's structured
+    ``{"detail": {"error": "captcha_required", "challenge_id", "challenge_url"}}``,
+    else None. (FastAPI nests the object under ``detail``.)"""
+    try:
+        data = resp.json()
+    except Exception:
+        return None
+    detail = data.get("detail") if isinstance(data, dict) else None
+    if isinstance(detail, dict) and detail.get("error") == "captcha_required":
+        return detail
+    return None
 
 
 def _server_unavailable(exc: httpx.RequestError) -> ServerUnavailable:
@@ -123,6 +151,13 @@ class NcryptedClient:
         except httpx.RequestError as e:
             raise _server_unavailable(e) from e
         if resp.status_code != 200:
+            captcha = _captcha_detail(resp)
+            if captcha is not None:
+                raise CaptchaRequired(
+                    captcha.get("challenge_id", ""),
+                    captcha.get("challenge_url", ""),
+                    captcha.get("message", ""),
+                )
             raise ApiError(resp.status_code, _detail(resp))
         return resp.json()
 
@@ -136,6 +171,13 @@ class NcryptedClient:
         except httpx.RequestError as e:
             raise _server_unavailable(e) from e
         if resp.status_code != 200:
+            captcha = _captcha_detail(resp)
+            if captcha is not None:
+                raise CaptchaRequired(
+                    captcha.get("challenge_id", ""),
+                    captcha.get("challenge_url", ""),
+                    captcha.get("message", ""),
+                )
             raise ApiError(resp.status_code, _detail(resp))
         return resp.json()
 

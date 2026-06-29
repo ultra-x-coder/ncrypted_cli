@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, auth, banner, instance, ui, version_check
+from . import __version__, account_policy, auth, banner, captcha, instance, ui, version_check
 from .actions import (
     ArchiveWouldNotShrink,
     CryptoFailure,
@@ -576,17 +576,35 @@ def cmd_delete(args, settings) -> None:
 
 def cmd_register_user(args, settings) -> None:
     del args
-    username = ui.prompt_text("Username")
+    ui.info("Username: 5–15 chars, letters/digits/_/-, e.g. e_123_jf4-dhf_0")
+    # Lowercase to the server's canonical form so the user sees what is stored and
+    # the captcha-retry context (ip|register|username) stays identical between tries.
+    username = ui.prompt_text("Username").strip().lower()
+    try:
+        account_policy.validate_username(username)
+    except account_policy.AccountPolicyError as e:
+        _fail(str(e))
     try:
         password = ui.prompt_password("Password", confirm=True)
     except ValueError as e:
         _fail(str(e))
     try:
-        do_register_user(settings.server, username, password)
-    except CLIENT_ERRORS as e:
+        account_policy.validate_password(password)
+    except account_policy.AccountPolicyError as e:
+        _fail(str(e))
+    try:
+        do_register_user(settings.server, username, password, on_captcha=_await_captcha)
+    except RECOVERABLE_ERRORS as e:
         _fail(str(e))
     ui.ok(f"Registered\t{username}")
     ui.info("Run login-user to link this device.")
+
+
+def _await_captcha(challenge) -> None:
+    """Present a captcha challenge and block until the user has solved it. Shared by
+    login and registration (both retry the same request once the grant is stored)."""
+    captcha.render_challenge(challenge.challenge_url, challenge.message)
+    ui.pause("After you finish the verification, press Enter to continue...")
 
 
 def cmd_login_user(args, settings) -> None:
@@ -594,8 +612,8 @@ def cmd_login_user(args, settings) -> None:
     username = ui.prompt_text("Username")
     password = ui.prompt_password("Password")
     try:
-        do_login_user(settings.server, username, password)
-    except CLIENT_ERRORS as e:
+        do_login_user(settings.server, username, password, on_captcha=_await_captcha)
+    except RECOVERABLE_ERRORS as e:
         _fail(str(e))
     ui.ok(f"Logged in\t{username}")
 
